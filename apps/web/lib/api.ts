@@ -28,6 +28,32 @@ export async function fetchUsage(page = 1, pageSize = 20): Promise<import("./typ
   return parseJson<import("./types").UsagePage>(response);
 }
 
+// ---------- 工作台首页汇总（合并计数/额度/最近列表，减少首屏请求） ----------
+
+/** 合并工作台首页所需的计数、额度与最近列表（各取前 4 条）。需登录。 */
+export async function fetchDashboardSummary(): Promise<import("./types").DashboardSummary> {
+  const response = await fetch(`${apiBase()}/v1/dashboard/summary`, { credentials: "include" });
+  return parseJson<import("./types").DashboardSummary>(response);
+}
+
+export async function fetchStyleProfiles(): Promise<import("./types").StyleProfile[]> {
+  const response = await fetch(`${apiBase()}/v1/style-profiles`, { credentials: "include" });
+  const body = await parseJson<{ styles: import("./types").StyleProfile[] }>(response);
+  return body.styles;
+}
+
+export async function fetchMaterials(): Promise<import("./types").Material[]> {
+  const response = await fetch(`${apiBase()}/v1/materials`, { credentials: "include" });
+  const body = await parseJson<{ materials: import("./types").Material[] }>(response);
+  return body.materials;
+}
+
+export async function fetchSavedDocuments(): Promise<import("./types").WritingDocument[]> {
+  const response = await fetch(`${apiBase()}/v1/documents/saved`, { credentials: "include" });
+  const body = await parseJson<{ documents: import("./types").WritingDocument[] }>(response);
+  return body.documents;
+}
+
 // ---------- 文章鉴评 ----------
 
 /** 取某篇文档最新鉴评报告；未鉴评过返回 null（404 视为无报告，不抛错）。 */

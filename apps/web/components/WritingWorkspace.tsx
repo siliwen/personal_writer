@@ -1,12 +1,12 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import useSWR from "swr";
 import type {
   ArticleEvaluation,
   BusyAction,
   CurrentUser,
   Material,
-  ModelStatus,
   QuotaView,
   StyleJob,
   StyleProfile,
@@ -16,8 +16,11 @@ import type {
 import { EVALUATION_GENRES, SYSTEM_FREE_WRITE_STYLE_ID } from "@/lib/types";
 import {
   apiBase,
+  fetchDashboardSummary,
   fetchDocumentEvaluation,
-  fetchQuota,
+  fetchMaterials,
+  fetchSavedDocuments,
+  fetchStyleProfiles,
   fetchUnreadCount,
   parseJson,
   requestDocumentEvaluation,
@@ -69,16 +72,10 @@ function WorkspaceInner() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [newStyleModalOpen, setNewStyleModalOpen] = useState(false);
   const [messageOpen, setMessageOpen] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
 
-  const [materials, setMaterials] = useState<Material[]>([]);
-  const [styles, setStyles] = useState<StyleProfile[]>([]);
   const [selectedStyleId, setSelectedStyleId] = useState("");
-  const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
-  const [quota, setQuota] = useState<QuotaView | null>(null);
   const [document, setDocument] = useState<WritingDocument | null>(null);
   const [generationCount, setGenerationCount] = useState(0);
-  const [savedDocuments, setSavedDocuments] = useState<WritingDocument[]>([]);
   const [busyDocumentId, setBusyDocumentId] = useState<string | null>(null);
 
   // 文章鉴评（首版仅散文）
@@ -113,12 +110,64 @@ function WorkspaceInner() {
     [styleJob]
   );
 
+  const isAuthed = !!currentUser;
+
+  // ---- 数据加载（SWR：自带去重，根治 StrictMode 双发；并按需懒加载）----
+  // 风格档案常驻：含游客公开风格，供首页无风格写作下拉使用。
+  const { data: stylesData, mutate: mutateStyles } = useSWR(
+    "style-profiles",
+    () => fetchStyleProfiles(),
+    { revalidateOnFocus: false }
+  );
+  const styles = useMemo(() => stylesData ?? [], [stylesData]);
+
+  // 工作台汇总：计数 + 额度 + 最近列表，将多个首屏请求合并为 1 个（需登录）。
+  const { data: summary, mutate: mutateSummary } = useSWR(
+    isAuthed ? "dashboard/summary" : null,
+    () => fetchDashboardSummary(),
+    { revalidateOnFocus: false }
+  );
+  const quota = summary?.quota ?? null;
+  const materialsCount = summary?.materials_count ?? 0;
+  const stylesCount = summary?.styles_count ?? 0;
+  const recentDocuments = summary?.recent_documents ?? [];
+
+  // 未读消息数：独立于汇总，便于消息中心操作后即时刷新（需登录）。
+  const { data: unreadData, mutate: mutateUnread } = useSWR(
+    isAuthed ? "messages/unread-count" : null,
+    () => fetchUnreadCount(),
+    { revalidateOnFocus: false }
+  );
+  const unreadCount = unreadData?.unread_count ?? 0;
+
+  // 参考作品：仅在打开「设置」时按需拉取；首页仅需计数（已由汇总提供）。
+  const { data: materialsData, mutate: mutateMaterials } = useSWR(
+    isAuthed && currentView === "settings" ? "materials" : null,
+    () => fetchMaterials(),
+    { revalidateOnFocus: false }
+  );
+  const materials = useMemo(() => materialsData ?? [], [materialsData]);
+
+  // 已保存文章：仅在打开「文章库」时按需拉取；首页仅需最近几条（已由汇总提供）。
+  const { data: savedData, mutate: mutateSaved } = useSWR(
+    isAuthed && currentView === "articles" ? "documents/saved" : null,
+    () => fetchSavedDocuments(),
+    { revalidateOnFocus: false }
+  );
+  const savedDocuments = useMemo(() => savedData ?? [], [savedData]);
+
+  // 首次拿到风格列表时默认选中第一个（仅当用户尚未主动选择过）。
+  useEffect(() => {
+    if (styles.length && !selectedStyleId) {
+      setSelectedStyleId(styles[0].id);
+    }
+  }, [styles, selectedStyleId]);
+
   // Track previous user ID to detect login/logout transitions
   const prevUserIdRef = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     void refreshAll();
-    void loadUnread();
   }, []);
 
   // React to auth state changes (login / logout)
@@ -129,47 +178,23 @@ function WorkspaceInner() {
     prevUserIdRef.current = userId;
 
     if (userId && !prevId) {
-      // User logged in (or initial session found) — load user data
+      // 登录成功：汇总/未读 SWR 会随 isAuthed 激活自动拉取，这里只更新提示文案。
       setStatus(`已登录：${currentUser!.username}。可以继续使用工作台。`);
-      void Promise.all([loadMaterials(), loadStyles(), loadSavedDocuments(), loadQuota()]);
-      void loadUnread();
     } else if (!userId && prevId) {
-      setUnreadCount(0);
-      // User logged out — clear all user data
-      setMaterials([]);
-      setStyles([]);
-      setSavedDocuments([]);
+      // 退出登录：SWR key 置空后自动回落默认值；这里清理非数据态。
       setSelectedStyleId("");
       setDocument(null);
       setEvaluation(null);
       setGenerationCount(0);
-      setQuota(null);
       setFreeWriteMode(false);
       setCurrentView("dashboard");
       setStatus("已退出登录。未登录可以预览工作台，创建资产需要重新登录。");
     }
   }, [currentUser]);
 
-  async function loadQuota() {
-    try {
-      const q = await fetchQuota();
-      setQuota(q);
-    } catch {
-      setQuota(null);
-    }
-  }
-
-  async function loadUnread() {
-    try {
-      const res = await fetchUnreadCount();
-      setUnreadCount(res.unread_count);
-    } catch {
-      setUnreadCount(0);
-    }
-  }
-
   async function refreshAll() {
-    // Check if user has an existing session
+    // 恢复会话：若已有登录态（cookie），设置 currentUser，SWR 会据此激活汇总/未读请求。
+    // 风格档案常驻 SWR 已在挂载时拉取，无需在此重复加载；model-status 为死代码已移除。
     try {
       const response = await fetch(`${apiBase()}/v1/me`, { credentials: "include" });
       if (response.status !== 401) {
@@ -178,48 +203,6 @@ function WorkspaceInner() {
       }
     } catch {
       // Not logged in
-    }
-    await Promise.all([loadModelStatus(), loadStyles()]);
-  }
-
-  async function loadSavedDocuments() {
-    try {
-      const response = await fetch(`${apiBase()}/v1/documents/saved`, { credentials: "include" });
-      const body = await parseJson<{ documents: WritingDocument[] }>(response);
-      setSavedDocuments(body.documents);
-    } catch {
-      setSavedDocuments([]);
-    }
-  }
-
-  async function loadMaterials() {
-    try {
-      const response = await fetch(`${apiBase()}/v1/materials`, { credentials: "include" });
-      const body = await parseJson<{ materials: Material[] }>(response);
-      setMaterials(body.materials);
-    } catch {
-      setMaterials([]);
-    }
-  }
-
-  async function loadModelStatus() {
-    try {
-      const response = await fetch(`${apiBase()}/v1/model-status`, { credentials: "include" });
-      const body = await parseJson<ModelStatus>(response);
-      setModelStatus(body);
-    } catch {
-      setModelStatus(null);
-    }
-  }
-
-  async function loadStyles() {
-    try {
-      const response = await fetch(`${apiBase()}/v1/style-profiles`, { credentials: "include" });
-      const body = await parseJson<{ styles: StyleProfile[] }>(response);
-      setStyles(body.styles);
-      setSelectedStyleId((current) => current || body.styles[0]?.id || "");
-    } catch {
-      setStyles([]);
     }
   }
 
@@ -240,8 +223,13 @@ function WorkspaceInner() {
   }
 
   function handleOpenMessages() {
-    void loadUnread();
+    void mutateUnread();
     setMessageOpen(true);
+  }
+
+  // 消息中心操作后刷新未读数（忽略其传入的局部计数，直接重新拉取服务端真实值）
+  function handleUnreadChange(_count?: number) {
+    void mutateUnread();
   }
 
   function handleCloseNewStyle() {
@@ -282,7 +270,7 @@ function WorkspaceInner() {
         body: form,
       });
       const body = await parseJson<{ materials: Material[] }>(response);
-      await loadMaterials();
+      await mutateMaterials();
       setStatus(`已上传 ${body.materials.length} 篇作品，正在分析风格……`);
       currentPhase = "analysis";
       setBusyAction("analysis");
@@ -343,7 +331,7 @@ function WorkspaceInner() {
         body: JSON.stringify({ job_id: styleJob.id, name: normalizedStyleName, profile }),
       });
       const style = await parseJson<StyleProfile>(response);
-      await loadStyles();
+      await mutateStyles();
       setSelectedStyleId(style.id);
       setConfirmedStyleId(style.id);
       setStatus(`风格"${style.name}"已保存，可以用于写作。`);
@@ -372,7 +360,6 @@ function WorkspaceInner() {
       });
       await parseJson<{ id: string; status: string }>(response);
       const nextStyles = styles.filter((s) => s.id !== styleToDelete.id);
-      setStyles(nextStyles);
       if (selectedStyleId === styleToDelete.id) {
         setSelectedStyleId(nextStyles[0]?.id ?? "");
       }
@@ -385,7 +372,7 @@ function WorkspaceInner() {
         setGenerationCount(0);
       }
       setStatus(`风格"${styleToDelete.name}"已删除。`);
-      await loadStyles();
+      await mutateStyles();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setDeleteStyleError(message);
@@ -442,7 +429,7 @@ function WorkspaceInner() {
       await parseJson<{ id: string }>(response);
       setStatus(`风格"${editStyleName}"已更新。`);
       handleCloseEditStyle();
-      await loadStyles();
+      await mutateStyles();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const friendlyMessage = message.includes("风格名称已存在") ? "这个风格名称已经存在，请换一个名称。" : message;
@@ -465,7 +452,7 @@ function WorkspaceInner() {
       });
       await parseJson<{ id: string }>(response);
       setStatus(`已将"${style.name}"设为默认风格。`);
-      await loadStyles();
+      await mutateStyles();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStatus(`设置默认风格失败：${message}`);
@@ -571,8 +558,8 @@ function WorkspaceInner() {
           ? `第 ${nextGenerationCount} 版文章已生成，鉴评 ${body.evaluation.grade} 级。点击正文里的自然段即可提交修改意见。`
           : `第 ${nextGenerationCount} 版文章已生成。点击正文里的自然段即可提交修改意见。`
       );
-      void loadQuota();
-      void loadUnread();
+      void mutateSummary();
+      void mutateUnread();
       // 散文生成后端已自动鉴评，这里直接拉取报告；其他文体不请求。
       void loadEvaluation(body.document);
     } catch (error) {
@@ -651,8 +638,8 @@ function WorkspaceInner() {
           ? `第 ${nextGenerationCount} 版文章已生成。请在下方输入修改意见，继续优化文章。`
           : `第 ${nextGenerationCount} 版文章已生成。点击正文里的自然段即可提交修改意见。`
       );
-      void loadQuota();
-      void loadUnread();
+      void mutateSummary();
+      void mutateUnread();
       // 自由写作文章不鉴评，跳过拉取报告
       if (!isFree) void loadEvaluation(body.document);
     } catch (error) {
@@ -675,7 +662,7 @@ function WorkspaceInner() {
     });
     const updated = await parseJson<WritingDocument>(response);
     setDocument(updated);
-    await loadSavedDocuments();
+    await mutateSaved();
   }
 
   async function handleDownloadDocument(targetDocument?: WritingDocument): Promise<void> {
@@ -747,8 +734,8 @@ function WorkspaceInner() {
       setDocument(updated);
       setGenerationCount(nextGenerationCount);
       setStatus(`第 ${nextGenerationCount} 版文章已生成，已覆盖上一版。`);
-      void loadQuota();
-      void loadUnread();
+      void mutateSummary();
+      void mutateUnread();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setWritingError(`修改失败：${message}`);
@@ -770,7 +757,7 @@ function WorkspaceInner() {
       if (document?.id === documentId) {
         setDocument((current) => (current ? { ...current, is_saved: false, saved_at: null } : current));
       }
-      await loadSavedDocuments();
+      await mutateSaved();
       setStatus("文章已从个人库移除");
     } finally {
       setBusyDocumentId(null);
@@ -795,7 +782,7 @@ function WorkspaceInner() {
       );
       const body = await parseJson<{ rewritten_content: string }>(response);
       setStatus("AI 重写完成，请在弹窗中查看结果。");
-      void loadQuota();
+      void mutateSummary();
       return body.rewritten_content;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1049,9 +1036,9 @@ function WorkspaceInner() {
           {currentView === "dashboard" ? (
             <DashboardView
               currentUser={currentUser}
-              materials={materials}
+              materialsCount={materialsCount}
               styles={styles}
-              savedDocuments={savedDocuments}
+              savedDocuments={recentDocuments}
               generationCount={generationCount}
               quota={quota}
               generating={busyAction === "writing"}
@@ -1217,7 +1204,7 @@ function WorkspaceInner() {
       ) : null}
 
       {messageOpen ? (
-        <MessageCenter onClose={() => setMessageOpen(false)} onUnreadChange={setUnreadCount} />
+        <MessageCenter onClose={() => setMessageOpen(false)} onUnreadChange={handleUnreadChange} />
       ) : null}
     </div>
   );

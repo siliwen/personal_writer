@@ -351,6 +351,29 @@ def account_quota(
     return get_quota_view(db, user)
 
 
+@app.get("/v1/dashboard/summary")
+def dashboard_summary(
+    user: models.User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """合并工作台首页所需的计数、额度与最近列表，减少首屏并发请求数。
+
+    返回：参考作品数、风格档案数、已保存文章数、额度，以及最近风格/文章各前 4 条。
+    """
+    quota = get_quota_view(db, user)
+    materials = list_materials(db, user_id=user.id)
+    styles = list_style_profiles(db, user_id=user.id)
+    saved = list_saved_documents(db, user_id=user.id)
+    return {
+        "materials_count": len(materials),
+        "styles_count": len(styles),
+        "saved_count": len(saved),
+        "quota": quota,
+        "recent_styles": [style_profile_to_dict(s) for s in styles[:4]],
+        "recent_documents": [document_to_dict(d) for d in saved[:4]],
+    }
+
+
 @app.get("/v1/account/usage")
 def account_usage(
     page: int = 1,

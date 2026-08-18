@@ -1,11 +1,11 @@
 "use client";
 
-import type { CurrentUser, Material, QuotaView, StyleProfile, WritingDocument, ViewName } from "@/lib/types";
+import type { CurrentUser, QuotaView, StyleProfile, WritingDocument, ViewName } from "@/lib/types";
 import { FreeWriteBox, type FreeWritePayload } from "./FreeWriteBox";
 
 type DashboardViewProps = {
   currentUser: CurrentUser | null;
-  materials: Material[];
+  materialsCount: number;
   styles: StyleProfile[];
   savedDocuments: WritingDocument[];
   generationCount: number;
@@ -23,7 +23,7 @@ function formatDate(value: string | null | undefined): string {
 
 export function DashboardView({
   currentUser,
-  materials,
+  materialsCount,
   styles,
   savedDocuments,
   generationCount,
@@ -62,7 +62,7 @@ export function DashboardView({
         <div className="metric-card">
           <div className="metric-label">参考作品</div>
           <div className="metric-value">
-            {materials.length}
+            {materialsCount}
             <span className="metric-unit">篇</span>
           </div>
         </div>

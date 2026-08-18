@@ -109,6 +109,16 @@ export type ArticleLengthBracket = {
   points: number;
 };
 
+/** /v1/dashboard/summary 返回结构：合并工作台首页所需的计数、额度与最近列表，减少首屏请求数。 */
+export type DashboardSummary = {
+  materials_count: number;
+  styles_count: number;
+  saved_count: number;
+  quota: QuotaView | null;
+  recent_styles: StyleProfile[];
+  recent_documents: WritingDocument[];
+};
+
 /** /v1/account/quota 返回结构。 */
 export type QuotaView = {
   tier: MembershipTierInfo;

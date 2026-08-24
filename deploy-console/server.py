@@ -16,6 +16,7 @@ import os
 import subprocess
 import tarfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +31,17 @@ LOG_PATH = os.path.join(MOXX_ROOT, "update-console.log")
 os.makedirs(INCOMING, exist_ok=True)
 
 proc = None  # 当前运行的更新子进程
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """多线程 HTTP 服务器：单个慢请求不会阻塞其他请求。
+
+    标准库 Python 3.7+ 才有 ThreadingHTTPServer，这里手动组合以兼容
+    ECS 上的 Python 3.6。allow_reuse_address 保证 kill 后端口可立即复用。
+    """
+
+    allow_reuse_address = True
+    daemon_threads = True
 
 
 def _sha256(path: str) -> str:
@@ -86,6 +98,8 @@ def build_check_payload() -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 30  # 单请求处理超时（秒），避免慢连接拖死服务
+
     def _send_json(self, obj, status: int = 200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -172,7 +186,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
+    # 多线程 + SO_REUSEADDR：一个慢请求不阻塞其他请求，kill 后端口可立即重启
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"临时更新控制台已启动: http://<ECS_IP>:{PORT}/")
     print(f"  更新包目录: {INCOMING}")
     print(f"  日志文件:   {LOG_PATH}")

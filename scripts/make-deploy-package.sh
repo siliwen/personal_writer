@@ -55,8 +55,13 @@ tar -czf "$OUT" \
   --exclude='*.pyc' \
   --exclude='.pytest_cache' \
   --exclude='*.db' \
+  --exclude='*.db.bak_*' \
+  --exclude='*.tsbuildinfo' \
   --exclude='.env.local' \
   --exclude='deploy-console' \
+  --exclude='smoke_*.txt' \
+  --exclude='results_all.txt' \
+  --exclude='apps/api/outputs' \
   apps \
   package.json \
   package-lock.json \

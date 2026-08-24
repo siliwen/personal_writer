@@ -70,6 +70,15 @@ cd "$API"
 echo "[5/6] 安装依赖并构建前端"
 cd "$API" && .venv/bin/pip install -r requirements.txt || true
 cd "$WEB" && npm install && NEXT_PUBLIC_API_BASE_URL=/api npm run build
+# 构建产物自检：NEXT_PUBLIC_API_BASE_URL 必须已内联为 /api。
+# 若残留未替换的变量引用或 :8010 直连 fallback -> 中止并回滚（8-14、8-24 两度因此登录失败）。
+if grep -rlq "NEXT_PUBLIC_API_BASE_URL" .next/static/chunks/ --include='*.js' 2>/dev/null; then
+  echo "[FAIL] 前端构建未注入 NEXT_PUBLIC_API_BASE_URL（残留未替换变量引用），中止并回滚"; exit 1
+fi
+if grep -rlq ":8010" .next/static/chunks/ --include='*.js' 2>/dev/null; then
+  echo "[FAIL] 前端构建产物仍含 :8010 直连 fallback，中止并回滚"; exit 1
+fi
+echo "[ok] 前端构建产物已内联 /api（无 :8010 残留）"
 
 echo "[6/6] 重启服务与健康检查"
 systemctl daemon-reload

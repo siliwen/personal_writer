@@ -467,14 +467,17 @@ def list_all_usage(
     page_size: int = 50,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    stmt = select(models.UsageRecord)
+    # LEFT JOIN users 取 username：流水用户可能已被删除，需保留记录且 username 可为空
+    stmt = select(models.UsageRecord, models.User.username).outerjoin(
+        models.User, models.UsageRecord.user_id == models.User.id
+    )
     if user_id:
         stmt = stmt.where(models.UsageRecord.user_id == user_id)
     if op_type:
         stmt = stmt.where(models.UsageRecord.op_type == op_type)
     stmt = stmt.order_by(models.UsageRecord.created_at.desc())
-    total = len(db.scalars(stmt).all())
-    rows = db.scalars(stmt.offset((max(1, page) - 1) * page_size).limit(page_size)).all()
+    total = len(db.execute(stmt).all())
+    rows = db.execute(stmt.offset((max(1, page) - 1) * page_size).limit(page_size)).all()
     return {
         "total": total,
         "page": page,
@@ -483,6 +486,7 @@ def list_all_usage(
             {
                 "id": r.id,
                 "user_id": r.user_id,
+                "username": username,  # 前端优先显示用户名；用户已删除时为 None，前端回退显示 user_id
                 "op_type": r.op_type,
                 "points_consumed": r.points_consumed,
                 "document_id": r.document_id,
@@ -492,7 +496,7 @@ def list_all_usage(
                 "cost_cny": float(r.cost_cny),
                 "created_at": r.created_at.isoformat(),
             }
-            for r in rows
+            for r, username in rows
         ],
     }
 

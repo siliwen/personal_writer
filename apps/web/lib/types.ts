@@ -148,8 +148,8 @@ export type UsagePage = {
   items: UsageRecord[];
 };
 
-/** 管理后台：消耗流水（比用户侧多返回 user_id）。 */
-export type AdminUsageRecord = UsageRecord & { user_id: string };
+/** 管理后台：消耗流水（比用户侧多返回 user_id 和 username）。 */
+export type AdminUsageRecord = UsageRecord & { user_id: string; username: string | null };
 
 export type AdminUsagePage = {
   total: number;

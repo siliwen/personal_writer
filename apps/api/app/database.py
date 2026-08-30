@@ -183,6 +183,10 @@ DEFAULT_OPERATION_COSTS = [
 ]
 
 DEFAULT_MODEL_PRICING = [
+    # 生产实际调用的模型（阿里云百炼 qwen-plus 稳定版，非思考模式官方价）
+    {"id": "price_qwen_plus", "model": "qwen-plus", "input_price_per_m": 0.8, "output_price_per_m": 2.0,
+     "currency": "CNY", "note": "百炼标准价（非思考输出）"},
+    # 历史保留：早期内部测试模型名，勿删，旧流水仍可能引用
     {"id": "price_qwen3_7_plus", "model": "qwen3.7-plus", "input_price_per_m": 1.6, "output_price_per_m": 6.4,
      "currency": "CNY", "note": "标准价（限时8折）"},
 ]

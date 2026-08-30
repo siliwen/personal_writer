@@ -85,7 +85,7 @@ export function AdminUsage() {
                   <td>{r.model_name ?? "—"}</td>
                   <td>{r.input_tokens}/{r.output_tokens}</td>
                   <td>{r.cost_cny ? (r.cost_cny as number).toFixed(4) : "0"}</td>
-                  <td className="admin-monospace">{r.user_id}</td>
+                  <td className="admin-monospace" title={r.user_id}>{r.username ?? r.user_id}</td>
                 </tr>
               ))
             )}

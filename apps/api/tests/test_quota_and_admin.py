@@ -247,3 +247,36 @@ def test_admin_usage_filter_by_user(admin_client: TestClient):
     uid = next(u["user_id"] for u in users if u["username"] == "user_u2")
     resp = admin_client.get(f"/v1/admin/usage?user_id={uid}").json()
     assert resp["total"] >= 0
+
+
+def test_admin_usage_items_include_username(admin_client: TestClient):
+    """管理后台消耗流水应返回 username，而不是只给 user_id（前端显示用户名更直观）。"""
+    admin_client.post(
+        "/v1/auth/register",
+        json={"username": "usage_uname", "password": "password123", "confirm_password": "password123", "agreed_terms": True},
+    )
+    admin_client.post("/v1/auth/login", json={"username": "adminuser", "password": "password123"})
+    users = admin_client.get("/v1/admin/users").json()["items"]
+    uid = next(u["user_id"] for u in users if u["username"] == "usage_uname")
+    # 通过管理员补发产生一条流水，保证 usage 列表非空
+    admin_client.post(f"/v1/admin/users/{uid}/points", json={"delta": 5, "reason": "测试流水"})
+    resp = admin_client.get(f"/v1/admin/usage?user_id={uid}").json()
+    assert resp["total"] >= 1
+    record = next(r for r in resp["items"] if r["user_id"] == uid)
+    assert record["username"] == "usage_uname", "流水条目应携带 username 字段"
+
+
+def test_seed_includes_qwen_plus_pricing(admin_client: TestClient):
+    """种子数据应包含 qwen-plus 定价（生产实际调用的模型），否则 cost_cny 恒为 0。"""
+    from app.core.points_service import compute_cost_cny
+    from app.database import get_db as _get_db
+
+    # admin_client 的会话工厂已 seed；直接从 app 依赖里取 db
+    gen = app.dependency_overrides[get_db]()
+    db = next(gen)
+    try:
+        cost = compute_cost_cny(db, "qwen-plus", input_tokens=1_000_000, output_tokens=1_000_000)
+        # 0.8 + 2.0 = 2.8 元 / 百万 tokens
+        assert cost == pytest.approx(2.8), f"qwen-plus 应有定价并算出成本，实际 {cost}"
+    finally:
+        db.close()

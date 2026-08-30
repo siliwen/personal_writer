@@ -182,6 +182,38 @@ MVP1.1 已补真实个人用户系统，当前目标是在用户数据隔离下�
 - [x] 已生成文章不依赖风格列表展示，删除风格不会影响历史生成结果。
 - [x] 新增 API 回归测试覆盖风格软删除、列表隐藏、删除后禁止写作和重复删除幂等。
 
+## 2026-08-30 后台积分消耗页两项修复（用户名 + 成本恒为 0）
+
+**需求来源**：用户截图反馈——①「用户」列显示 user_id（如 user_f997871e48d6）不直观，要求显示用户名；②「成本(¥)」列恒为 0。
+
+**根因**
+1. 用户名：`/v1/admin/usage` 端点只返回 `user_id`，未 JOIN users 表取 username。
+2. 成本为 0：`model_pricing` 表只有 `qwen3.7-plus`（早期内部测试模型名），而生产实际调用的模型是 `qwen-plus`，`compute_cost_cny` 精确匹配不到定价即返回 0。**扣费/积分逻辑本身无 bug**。
+
+**改动**
+- [x] `apps/api/app/database.py`：`DEFAULT_MODEL_PRICING` 新增 `qwen-plus`（input ¥0.8 / output ¥2.0，阿里云百炼官方价，非思考输出）；保留 `qwen3.7-plus` 历史记录。
+- [x] `apps/api/app/admin_routes.py`：`/v1/admin/usage` 改为 LEFT JOIN users，每条流水返回 `username`（用户已删除时为 None，前端回退显示 user_id）。
+- [x] `apps/web/lib/types.ts`：`AdminUsageRecord` 增加 `username: string | null`。
+- [x] `apps/web/components/AdminUsage.tsx`：用户列渲染 `r.username ?? r.user_id`，title 悬浮显示完整 user_id。
+- [x] 测试（TDD）：`test_quota_and_admin.py` 新增 `test_admin_usage_items_include_username`、`test_seed_includes_qwen_plus_pricing`（1_000_000 tokens 验证 0.8+2.0=2.8 元）。
+- [x] 用户确认：**历史流水 cost_cny=0 不回补**，仅新记录按 qwen-plus 定价计算。
+
+**验证**
+- [x] pytest `test_quota_and_admin.py` 12 条全过（含 2 条新增）；`test_admin_p0.py` 8 条回归全过。
+- [x] `tsc --noEmit` 通过。
+- [x] 本地真实 DB 冒烟：重启后端 seed 插入 qwen-plus 定价；`/admin/usage` 返回 `username: superadmin`（对应 user_f997871e48d6）。
+- [x] 生产部署后生效路径：seed 在启动时自动执行（`_seed_membership_data` upsert），无需手工 SQL。
+
+## 2026-08-30 dev 环境登录 404 HTML 修复（rewrites）
+
+**需求来源**：用户截图反馈本地 dev（127.0.0.1:3230）登录报「Unexpected token '<'」。
+
+**根因**：`next dev` 时 `NEXT_PUBLIC_API_BASE_URL` 未设置，被 `next.config.ts` 构建期兜底为 `/api`，但 dev 模式没有 nginx 反代，`/api/*` 被 Next.js 路由接管返回 404 HTML。
+
+**改动**
+- [x] `apps/web/next.config.ts`：新增 `rewrites()`——`/api/:path*` → `${API_PROXY_TARGET || "http://127.0.0.1:8010"}/:path*`。
+- [x] 生产安全性实测：rewrites 只进服务端 `routes-manifest.json`（afterFiles），客户端 chunks 无 `:8010`、无 `NEXT_PUBLIC_API_BASE_URL` 残留（复刻 `update-from-tar.sh` 发布自检全过）；生产 nginx 在请求到达 Next.js 前已 proxy_pass `/api/`，rewrites 永不触发。
+
 ## 2026-08-17 法律协议接入注册/登录/页脚
 
 - [x] 起草《隐私政策》《用户协议》并存放 `10_legal_法律协议/`（见 2026-08-17 决策）。

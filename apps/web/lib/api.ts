@@ -9,9 +9,20 @@ export function apiBase() {
 }
 
 export async function parseJson<T>(response: Response): Promise<T> {
-  const body = await response.json();
+  const contentType = response.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+  const body = isJson ? await response.json() : await response.text();
   if (!response.ok) {
-    throw new Error(body.detail ?? body.message ?? `HTTP ${response.status}`);
+    if (isJson) {
+      throw new Error(body.detail ?? body.message ?? `HTTP ${response.status}`);
+    }
+    if (response.status === 504) {
+      throw new Error("服务器处理超时，请稍后重试。");
+    }
+    throw new Error(`HTTP ${response.status}`);
+  }
+  if (!isJson) {
+    throw new Error("服务器返回了无法识别的内容。");
   }
   return body as T;
 }
@@ -46,6 +57,11 @@ export async function fetchMaterials(): Promise<import("./types").Material[]> {
   const response = await fetch(`${apiBase()}/v1/materials`, { credentials: "include" });
   const body = await parseJson<{ materials: import("./types").Material[] }>(response);
   return body.materials;
+}
+
+export async function fetchStyleAnalysisJob(jobId: string): Promise<import("./types").StyleJob> {
+  const response = await fetch(`${apiBase()}/v1/style-analysis-jobs/${jobId}`, { credentials: "include" });
+  return parseJson<import("./types").StyleJob>(response);
 }
 
 export async function fetchSavedDocuments(): Promise<import("./types").WritingDocument[]> {

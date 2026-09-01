@@ -83,6 +83,40 @@ sudo bash /root/ec2-deploy.sh
 
 > ⚠️ **数据库位置与保护**：`ec2-deploy.sh` 把 `DATABASE_URL` 写死为 `/opt/moxx/apps/api/personal_writing_agent_mvp1.db`（**在 `apps/api/` 内**）。**更新千万不要 `rm -rf /opt/moxx/apps`**，否则会删除生产数据库！正确做法是直接用 `tar -xzf` 覆盖解压——tar 只覆盖包内文件，不会删除包外的 `*.db` / `.env.local` / `.venv` / `.next`。
 
+### 方式 0：Codex 托管发布（推荐）
+
+本项目支持通过阿里云 Workbench CLI 从本机托管发布到 ECS。前置条件：
+
+- 本机已安装 `workbench` CLI。
+- `C:\Users\songw\.workbench\config.json` 已配置可访问生产 ECS 的 RAM 凭证。
+- 生产 ECS 仍为 `i-bp16w2dei36gapux2ew9`，地域 `cn-hangzhou`，生产目录 `/opt/moxx`。
+
+在本地项目根目录执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-production.ps1
+```
+
+默认流程：
+
+1. 校验 Workbench 配置并确认目标 ECS。
+2. 运行后端测试和前端类型检查。
+3. 生成 `moxx-deploy.tar.gz`。
+4. 上传部署包到 `/opt/moxx/incoming/`。
+5. 上传并执行 `scripts/remote-update-production.sh`。
+6. 远端备份数据库和环境文件、停止服务、覆盖解压、执行迁移、构建前端、重启服务并检查 `/healthz`。
+7. 任一步失败时，远端脚本会尝试恢复数据库、环境文件和上一份部署包。
+
+常用参数：
+
+```powershell
+# 跳过本地测试/类型检查，仅做打包与发布
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-production.ps1 -SkipLocalChecks
+
+# 自动确认，适合在已明确授权后执行
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-production.ps1 -NoConfirm
+```
+
 ### 方式 A：tar 覆盖（默认，适用于 tar 解压的 /opt/moxx）
 ```bash
 # 0) 先备份数据库（安全网）

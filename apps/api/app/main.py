@@ -5,11 +5,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import Session
 
 from app import models
@@ -41,6 +42,7 @@ from app.core.points_service import (
 from app.core.model_gateway import ModelGateway
 from app.core.mvp_service import (
     DEMO_USER_ID,
+    complete_style_analysis_job,
     confirm_style_profile,
     create_free_writing,
     create_material,
@@ -435,13 +437,16 @@ def get_materials(
 @app.post("/v1/style-analysis-jobs")
 def create_style_job(
     request: CreateStyleAnalysisJobRequest,
+    background_tasks: BackgroundTasks,
     user: models.User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    # 风格分析按固定积分扣费（当前为本地启发式，无模型调用，真实成本为 0）
+    # 风格分析会调用模型，耗时不稳定；先创建任务并在后台分析，前端轮询任务状态。
     points = validate_and_price(db, user, STYLE_ANALYSIS)
     job = create_style_analysis_job(db, user_id=user.id, material_ids=request.material_ids)
     charge(db, user, STYLE_ANALYSIS, points)
+    session_factory = sessionmaker(bind=db.get_bind(), autoflush=False, autocommit=False, expire_on_commit=False)
+    background_tasks.add_task(_run_style_analysis_job, session_factory, job.id)
     return style_job_to_dict(job)
 
 
@@ -452,6 +457,11 @@ def get_style_job(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     return style_job_to_dict(get_style_analysis_job(db, user_id=user.id, job_id=job_id))
+
+
+def _run_style_analysis_job(session_factory, job_id: str) -> None:
+    with session_factory() as db:
+        complete_style_analysis_job(db, job_id=job_id)
 
 
 @app.post("/v1/style-profiles/confirm")
@@ -699,6 +709,8 @@ def _run_auto_evaluation(
     document: models.Document,
 ) -> dict[str, Any] | None:
     """散文生成完成后自动鉴评并推送系统通知。失败不影响主流程。"""
+    if not user.is_admin:
+        return None
     # 自由写作（无风格生成）暂不鉴评：无风格基准，鉴评量规无法判定风格契合。
     if task.style_profile_id == SYSTEM_FREE_WRITE_STYLE_ID:
         return None
@@ -737,6 +749,11 @@ def _owned_writing_task(db: Session, task_id: str, user: models.User) -> models.
     return task
 
 
+def _require_article_evaluation_admin(user: models.User) -> None:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="文章鉴评功能仅管理员可用。")
+
+
 @app.post("/v1/writing-tasks/{task_id}/evaluate")
 def evaluate_writing_task(
     task_id: str,
@@ -744,6 +761,7 @@ def evaluate_writing_task(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     task = _owned_writing_task(db, task_id, user)
+    _require_article_evaluation_admin(user)
     document = db.get(models.Document, task.document_id) if task.document_id else None
     if document is None:
         raise HTTPException(status_code=404, detail="document not found")
@@ -776,6 +794,7 @@ def get_writing_task_evaluation(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     task = _owned_writing_task(db, task_id, user)
+    _require_article_evaluation_admin(user)
     evaluation = evaluation_service.latest_evaluation(db, user_id=user.id, writing_task_id=task.id)
     if evaluation is None:
         raise HTTPException(status_code=404, detail="evaluation not found")
@@ -791,6 +810,7 @@ def get_document_evaluation(
     document = db.get(models.Document, document_id)
     if document is None or document.user_id != user.id:
         raise HTTPException(status_code=404, detail="document not found")
+    _require_article_evaluation_admin(user)
     evaluation = evaluation_service.latest_evaluation(db, user_id=user.id, document_id=document.id)
     if evaluation is None:
         raise HTTPException(status_code=404, detail="evaluation not found")
@@ -806,6 +826,7 @@ def evaluate_document_endpoint(
     document = db.get(models.Document, document_id)
     if document is None or document.user_id != user.id:
         raise HTTPException(status_code=404, detail="document not found")
+    _require_article_evaluation_admin(user)
     if not evaluation_service.is_supported_genre(document.genre):
         raise HTTPException(
             status_code=422,

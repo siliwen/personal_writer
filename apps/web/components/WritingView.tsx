@@ -28,6 +28,7 @@ type WritingViewProps = {
   evaluationLoading: boolean;
   evaluationError: string;
   onEvaluate: () => void;
+  canUseEvaluation?: boolean;
 };
 
 export type WritingParams = {
@@ -66,6 +67,7 @@ export function WritingView({
   evaluationLoading,
   evaluationError,
   onEvaluate,
+  canUseEvaluation = false,
 }: WritingViewProps) {
   const { requireAuth } = useAuth();
   const [writingGenre, setWritingGenre] = useState("散文");
@@ -296,14 +298,16 @@ export function WritingView({
               showSaveButton
               paragraphRewritePoints={quota ? quota.operation_points.paragraph_rewrite : null}
             />
-            <EvaluationPanel
-              evaluation={evaluation}
-              loading={evaluationLoading}
-              error={evaluationError}
-              supported={EVALUATION_GENRES.includes(doc.genre) && !freeWriteMode}
-              genre={doc.genre}
-              onEvaluate={onEvaluate}
-            />
+            {canUseEvaluation ? (
+              <EvaluationPanel
+                evaluation={evaluation}
+                loading={evaluationLoading}
+                error={evaluationError}
+                supported={EVALUATION_GENRES.includes(doc.genre) && !freeWriteMode}
+                genre={doc.genre}
+                onEvaluate={onEvaluate}
+              />
+            ) : null}
           </>
         ) : (
           <div className="empty-state">

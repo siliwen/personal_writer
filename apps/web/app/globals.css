@@ -1046,6 +1046,17 @@ body::-webkit-scrollbar,
   line-height: 1.5;
 }
 
+.upload-guidance {
+  margin: 16px 0 0;
+  padding: 11px 13px;
+  border-left: 3px solid var(--warning);
+  background: var(--warning-light);
+  color: var(--text-primary);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.65;
+}
+
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2664,7 +2675,7 @@ body::-webkit-scrollbar,
 }
 
 .style-card-main:hover {
-  background: var(--accent-light-bg);
+  background: transparent;
 }
 
 .style-card-cta {
@@ -2672,8 +2683,8 @@ body::-webkit-scrollbar,
   font-weight: 500;
   color: var(--accent);
   margin-top: 8px;
-  opacity: 0;
-  transition: opacity 0.15s;
+  opacity: 0.68;
+  transition: opacity 0.15s, color 0.15s;
 }
 
 .style-card-clickable:hover .style-card-cta {

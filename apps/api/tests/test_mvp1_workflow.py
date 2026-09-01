@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from io import BytesIO
 import json
@@ -67,6 +67,52 @@ def _upload_material(client: TestClient, filename: str, content: str) -> str:
     return material["id"]
 
 
+def _create_style_job(client: TestClient, material_ids: list[str]) -> dict:
+    response = client.post("/v1/style-analysis-jobs", json={"material_ids": material_ids})
+    assert response.status_code == 200
+    job = response.json()
+    ready = client.get(f"/v1/style-analysis-jobs/{job['id']}")
+    assert ready.status_code == 200
+    return ready.json()
+
+
+def test_style_analysis_job_creation_returns_before_draft_is_ready() -> None:
+    client = TestClient(app)
+    material_id = _upload_material(client, "async-style.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
+
+    response = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]})
+
+    assert response.status_code == 200
+    created = response.json()
+    assert created["status"] == "analyzing"
+    assert created["draft_profile"] == {}
+
+    ready = client.get(f"/v1/style-analysis-jobs/{created['id']}")
+    assert ready.status_code == 200
+    assert ready.json()["status"] == "draft_pending_confirmation"
+    assert ready.json()["draft_profile"]["status"] == "draft_pending_confirmation"
+
+
+def test_style_analysis_background_model_failure_falls_back_to_confirmable_draft(monkeypatch) -> None:
+    def fake_generate(self, *, messages, purpose, fallback):
+        raise RuntimeError("simulated provider timeout")
+
+    monkeypatch.setattr(ModelGateway, "generate", fake_generate)
+    client = TestClient(app)
+    material_id = _upload_material(client, "failed-style.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
+
+    response = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]})
+
+    assert response.status_code == 200
+    job = response.json()
+    ready = client.get(f"/v1/style-analysis-jobs/{job['id']}")
+    assert ready.status_code == 200
+    body = ready.json()
+    assert body["status"] == "draft_pending_confirmation"
+    assert body["draft_profile"]["status"] == "draft_pending_confirmation"
+    assert "simulated provider timeout" not in str(body["draft_profile"])
+
+
 def _grant_paid_features(client: TestClient) -> None:
     """将当前登录用户提升到 pro 等级，使其在 mvp 流程测试中拥有重写/下载权限与充足积分。
 
@@ -93,9 +139,7 @@ def test_demo_user_can_upload_analyze_confirm_write_and_rewrite_one_paragraph() 
     second_id = _upload_material(client, "b.txt", "雨落在铁皮棚上。\n\n母亲把灯拧暗。")
     _grant_paid_features(client)
 
-    job_response = client.post("/v1/style-analysis-jobs", json={"material_ids": [first_id, second_id]})
-    assert job_response.status_code == 200
-    job = job_response.json()
+    job = _create_style_job(client, [first_id, second_id])
     assert job["status"] == "draft_pending_confirmation"
     assert job["draft_profile"]["status"] == "draft_pending_confirmation"
 
@@ -236,10 +280,8 @@ def test_style_analysis_uses_model_to_create_actionable_v2_profile(monkeypatch) 
     first_id = _upload_material(client, "a.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
     second_id = _upload_material(client, "b.txt", "雨落在铁皮棚上。\n\n母亲把灯拧暗。")
 
-    response = client.post("/v1/style-analysis-jobs", json={"material_ids": [first_id, second_id]})
-
-    assert response.status_code == 200
-    draft = response.json()["draft_profile"]
+    job = _create_style_job(client, [first_id, second_id])
+    draft = job["draft_profile"]
     assert captured["purpose"] == "style_analysis"
     user_prompt = captured["messages"][1]["content"]  # type: ignore[index]
     assert "词汇与句法层" in user_prompt
@@ -264,10 +306,8 @@ def test_style_analysis_falls_back_to_v2_profile_when_model_output_is_invalid_js
     client = TestClient(app)
     material_id = _upload_material(client, "fallback-style.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
 
-    response = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]})
-
-    assert response.status_code == 200
-    draft = response.json()["draft_profile"]
+    job = _create_style_job(client, [material_id])
+    draft = job["draft_profile"]
     assert draft["profile_version"] == "style_profile_v2"
     assert draft["status"] == "draft_pending_confirmation"
     assert "source_stats" in draft
@@ -283,10 +323,8 @@ def test_style_analysis_returns_plain_language_display_report_for_user_confirmat
     client = TestClient(app)
     material_id = _upload_material(client, "plain-report.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
 
-    response = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]})
-
-    assert response.status_code == 200
-    report = response.json()["draft_profile"]["display_report"]
+    job = _create_style_job(client, [material_id])
+    report = job["draft_profile"]["display_report"]
     assert "我们理解到" in report["plain_summary"]
     dimension_titles = [item["title"] for item in report["dimensions"]]
     assert dimension_titles == [
@@ -337,10 +375,8 @@ def test_chinese_style_analysis_display_report_does_not_show_english_terms(monke
     client = TestClient(app)
     material_id = _upload_material(client, "chinese-report.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
 
-    response = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]})
-
-    assert response.status_code == 200
-    report_text = "\n".join(_collect_string_values(response.json()["draft_profile"]["display_report"]))
+    job = _create_style_job(client, [material_id])
+    report_text = "\n".join(_collect_string_values(job["draft_profile"]["display_report"]))
     assert "predominantly" not in report_text
     assert "medium" not in report_text
     assert "factual" not in report_text
@@ -361,7 +397,7 @@ def _collect_string_values(value) -> list[str]:
 def test_confirming_style_requires_name() -> None:
     client = TestClient(app)
     material_id = _upload_material(client, "a.txt", "第一段。\n\n第二段。")
-    job = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]}).json()
+    job = _create_style_job(client, [material_id])
 
     response = client.post(
         "/v1/style-profiles/confirm",
@@ -374,7 +410,7 @@ def test_confirming_style_requires_name() -> None:
 def test_confirming_style_rejects_duplicate_active_name() -> None:
     client = TestClient(app)
     first_material_id = _upload_material(client, "first.txt", "第一段。\n\n第二段。")
-    first_job = client.post("/v1/style-analysis-jobs", json={"material_ids": [first_material_id]}).json()
+    first_job = _create_style_job(client, [first_material_id])
     first_response = client.post(
         "/v1/style-profiles/confirm",
         json={"job_id": first_job["id"], "name": "同名风格", "profile": first_job["draft_profile"]},
@@ -382,7 +418,7 @@ def test_confirming_style_rejects_duplicate_active_name() -> None:
     assert first_response.status_code == 200
 
     second_material_id = _upload_material(client, "second.txt", "第三段。\n\n第四段。")
-    second_job = client.post("/v1/style-analysis-jobs", json={"material_ids": [second_material_id]}).json()
+    second_job = _create_style_job(client, [second_material_id])
     duplicate_response = client.post(
         "/v1/style-profiles/confirm",
         json={"job_id": second_job["id"], "name": " 同名风格 ", "profile": second_job["draft_profile"]},
@@ -397,7 +433,7 @@ def test_confirming_style_rejects_duplicate_active_name() -> None:
 def test_reconfirming_same_style_analysis_job_returns_existing_style() -> None:
     client = TestClient(app)
     material_id = _upload_material(client, "source.txt", "第一段。\n\n第二段。")
-    job = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]}).json()
+    job = _create_style_job(client, [material_id])
     payload = {"job_id": job["id"], "name": "可重复确认风格", "profile": job["draft_profile"]}
 
     first_response = client.post("/v1/style-profiles/confirm", json=payload)
@@ -413,7 +449,7 @@ def test_reconfirming_same_style_analysis_job_returns_existing_style() -> None:
 def test_deleting_style_profile_soft_deletes_and_hides_it() -> None:
     client = TestClient(app)
     material_id = _upload_material(client, "delete-style.txt", "第一段。\n\n第二段。")
-    job = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]}).json()
+    job = _create_style_job(client, [material_id])
     style = client.post(
         "/v1/style-profiles/confirm",
         json={"job_id": job["id"], "name": "待删除风格", "profile": job["draft_profile"]},
@@ -500,7 +536,7 @@ def test_mock_writing_fallback_outputs_article_not_instructions(monkeypatch) -> 
     _force_gateway_fallback(monkeypatch)
     client = TestClient(app)
     material_id = _upload_material(client, "fallback.txt", "巷口的灯亮得很慢。\n\n木门后有旧年的灰尘。")
-    job = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]}).json()
+    job = _create_style_job(client, [material_id])
     style = client.post(
         "/v1/style-profiles/confirm",
         json={"job_id": job["id"], "name": "克制散文", "profile": job["draft_profile"]},
@@ -542,7 +578,7 @@ def test_repeated_mock_writing_requests_create_distinct_documents(monkeypatch) -
     client = TestClient(app)
     material_id = _upload_material(client, "repeat.txt", "门口有一只旧木箱。\n\n雨停后，地上还有水痕。")
     _grant_paid_features(client)
-    job = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]}).json()
+    job = _create_style_job(client, [material_id])
     style = client.post(
         "/v1/style-profiles/confirm",
         json={"job_id": job["id"], "name": "重复生成风格", "profile": job["draft_profile"]},
@@ -588,7 +624,7 @@ def test_writing_task_sends_style_intensity_to_model_prompt(monkeypatch) -> None
     monkeypatch.setattr(ModelGateway, "generate", fake_generate)
     client = TestClient(app)
     material_id = _upload_material(client, "intensity.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
-    job = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]}).json()
+    job = _create_style_job(client, [material_id])
     style = client.post(
         "/v1/style-profiles/confirm",
         json={"job_id": job["id"], "name": "贴近程度测试风格", "profile": job["draft_profile"]},
@@ -629,7 +665,7 @@ def test_user_can_write_with_recommended_style() -> None:
     me_a = client_a.get("/v1/me").json()
 
     material_id = _upload_material(client_a, "recommended-source.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
-    job = client_a.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]}).json()
+    job = _create_style_job(client_a, [material_id])
     style = client_a.post(
         "/v1/style-profiles/confirm",
         json={"job_id": job["id"], "name": "推荐散文风格", "profile": job["draft_profile"]},
@@ -688,7 +724,7 @@ def test_preview_rewrite_does_not_modify_original_document(monkeypatch) -> None:
     client = TestClient(app)
     material_id = _upload_material(client, "preview-rewrite.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
     _grant_paid_features(client)
-    job = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]}).json()
+    job = _create_style_job(client, [material_id])
     style = client.post(
         "/v1/style-profiles/confirm",
         json={"job_id": job["id"], "name": "预览重写风格", "profile": job["draft_profile"]},
@@ -730,7 +766,7 @@ def test_update_paragraph_overwrites_content_directly(monkeypatch) -> None:
     _force_gateway_fallback(monkeypatch)
     client = TestClient(app)
     material_id = _upload_material(client, "overwrite.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
-    job = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]}).json()
+    job = _create_style_job(client, [material_id])
     style = client.post(
         "/v1/style-profiles/confirm",
         json={"job_id": job["id"], "name": "覆盖测试风格", "profile": job["draft_profile"]},
@@ -773,7 +809,7 @@ def test_update_paragraph_rejects_empty_content(monkeypatch) -> None:
     _force_gateway_fallback(monkeypatch)
     client = TestClient(app)
     material_id = _upload_material(client, "empty-test.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
-    job = client.post("/v1/style-analysis-jobs", json={"material_ids": [material_id]}).json()
+    job = _create_style_job(client, [material_id])
     style = client.post(
         "/v1/style-profiles/confirm",
         json={"job_id": job["id"], "name": "空内容测试风格", "profile": job["draft_profile"]},
@@ -802,9 +838,7 @@ def test_update_paragraph_rejects_empty_content(monkeypatch) -> None:
 def _confirm_style(client: TestClient, name: str, profile: dict | None = None) -> dict:
     first_id = _upload_material(client, "a.txt", "门口有一把旧椅子。\n\n风从巷子里过来。")
     second_id = _upload_material(client, "b.txt", "雨落在铁皮棚上。\n\n母亲把灯拧暗。")
-    job_response = client.post("/v1/style-analysis-jobs", json={"material_ids": [first_id, second_id]})
-    assert job_response.status_code == 200
-    job = job_response.json()
+    job = _create_style_job(client, [first_id, second_id])
     confirm_response = client.post(
         "/v1/style-profiles/confirm",
         json={"job_id": job["id"], "name": name, "profile": profile or job["draft_profile"]},

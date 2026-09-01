@@ -20,6 +20,7 @@ import {
   fetchDocumentEvaluation,
   fetchMaterials,
   fetchSavedDocuments,
+  fetchStyleAnalysisJob,
   fetchStyleProfiles,
   fetchUnreadCount,
   parseJson,
@@ -56,6 +57,9 @@ const viewTitles: Record<ViewName, { title: string; subtitle: string }> = {
   admin: { title: "后台管理", subtitle: "会员、等级、积分与系统配置" },
 };
 
+const STYLE_ANALYSIS_POLL_INTERVAL_MS = 5000;
+const STYLE_ANALYSIS_MAX_POLLS = 36;
+
 export function WritingWorkspace() {
   return (
     <AuthProvider>
@@ -87,7 +91,6 @@ function WorkspaceInner() {
   const [styleName, setStyleName] = useState("我的散文风格");
   const [profileJson, setProfileJson] = useState("");
   const [confirmedStyleId, setConfirmedStyleId] = useState("");
-  const [uploadGenre, setUploadGenre] = useState("散文");
 
   const [status, setStatus] = useState("选择一个风格开始写作，或点击右上角「新建风格」创建新的风格档案。");
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
@@ -106,11 +109,14 @@ function WorkspaceInner() {
   const [editStyleError, setEditStyleError] = useState("");
 
   const styleDraftView = useMemo(
-    () => summarizeStyleDraft(styleJob?.draft_profile),
+    () => styleJob?.status === "draft_pending_confirmation" || styleJob?.status === "confirmed"
+      ? summarizeStyleDraft(styleJob.draft_profile)
+      : null,
     [styleJob]
   );
 
   const isAuthed = !!currentUser;
+  const canUseEvaluation = Boolean(currentUser?.is_admin);
 
   // ---- 数据加载（SWR：自带去重，根治 StrictMode 双发；并按需懒加载）----
   // 风格档案常驻：含游客公开风格，供首页无风格写作下拉使用。
@@ -262,7 +268,7 @@ function WorkspaceInner() {
     setStatus("正在上传并解析作品……");
     try {
       const form = new FormData();
-      form.set("genre", uploadGenre);
+      form.set("genre", "未分类");
       Array.from(files).forEach((file) => form.append("files", file));
       const response = await fetch(`${apiBase()}/v1/materials/upload`, {
         method: "POST",
@@ -280,7 +286,10 @@ function WorkspaceInner() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ material_ids: body.materials.map((item) => item.id) }),
       });
-      const job = await parseJson<StyleJob>(analysisResponse);
+      const createdJob = await parseJson<StyleJob>(analysisResponse);
+      setStyleJob(createdJob);
+      setStatus("风格分析已开始，正在生成诊断报告……");
+      const job = await waitForStyleAnalysis(createdJob.id);
       setStyleJob(job);
       setConfirmedStyleId("");
       setProfileJson(JSON.stringify(job.draft_profile, null, 2));
@@ -297,6 +306,25 @@ function WorkspaceInner() {
     } finally {
       setBusyAction(null);
     }
+  }
+
+  async function waitForStyleAnalysis(jobId: string): Promise<StyleJob> {
+    for (let attempt = 0; attempt < STYLE_ANALYSIS_MAX_POLLS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, STYLE_ANALYSIS_POLL_INTERVAL_MS));
+      }
+      const job = await fetchStyleAnalysisJob(jobId);
+      setStyleJob(job);
+      if (job.status === "draft_pending_confirmation") {
+        return job;
+      }
+      if (job.status === "failed") {
+        const detail = typeof job.draft_profile?.error === "string" ? job.draft_profile.error : "风格分析失败，请重新上传作品后再试。";
+        throw new Error(detail);
+      }
+      setStatus("风格分析还在进行中，请稍等一下……");
+    }
+    throw new Error("风格分析仍在进行中，请稍后刷新查看。");
   }
 
   async function handleConfirmStyle() {
@@ -464,7 +492,7 @@ function WorkspaceInner() {
   /** 拉取指定文档的最新鉴评报告；非散文直接清空，不打接口。 */
   async function loadEvaluation(doc: WritingDocument | null) {
     setEvaluationError("");
-    if (!doc || !EVALUATION_GENRES.includes(doc.genre)) {
+    if (!canUseEvaluation || !doc || !EVALUATION_GENRES.includes(doc.genre)) {
       setEvaluation(null);
       return;
     }
@@ -480,6 +508,7 @@ function WorkspaceInner() {
   /** 手动触发或重新触发鉴评。 */
   async function handleEvaluate() {
     if (!requireAuth()) return;
+    if (!canUseEvaluation) return;
     if (!document) return;
     setEvaluationLoading(true);
     setEvaluationError("");
@@ -554,14 +583,14 @@ function WorkspaceInner() {
       setDocument(body.document);
       setGenerationCount(nextGenerationCount);
       setStatus(
-        body.evaluation
+        canUseEvaluation && body.evaluation
           ? `第 ${nextGenerationCount} 版文章已生成，鉴评 ${body.evaluation.grade} 级。点击正文里的自然段即可提交修改意见。`
           : `第 ${nextGenerationCount} 版文章已生成。点击正文里的自然段即可提交修改意见。`
       );
       void mutateSummary();
       void mutateUnread();
-      // 散文生成后端已自动鉴评，这里直接拉取报告；其他文体不请求。
-      void loadEvaluation(body.document);
+      // 管理员散文生成后端已自动鉴评，这里直接拉取报告；其他用户/文体不请求。
+      if (canUseEvaluation) void loadEvaluation(body.document);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setWritingError(`本次生成失败。原因：${message}`);
@@ -640,8 +669,8 @@ function WorkspaceInner() {
       );
       void mutateSummary();
       void mutateUnread();
-      // 自由写作文章不鉴评，跳过拉取报告
-      if (!isFree) void loadEvaluation(body.document);
+      // 自由写作文章不鉴评；普通用户也不显示鉴评能力。
+      if (canUseEvaluation && !isFree) void loadEvaluation(body.document);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setWritingError(`本次生成失败。原因：${message}`);
@@ -716,7 +745,13 @@ function WorkspaceInner() {
       setCurrentView("reading");
     }
     setStatus(`已打开文章「${targetDocument.title}」。可继续修改或下载。`);
-    void loadEvaluation(targetDocument);
+    if (canUseEvaluation) {
+      void loadEvaluation(targetDocument);
+    } else {
+      setEvaluation(null);
+      setEvaluationError("");
+      setEvaluationLoading(false);
+    }
   }
 
   /** 自由写作详情页：按用户修改意见重生成并覆盖当前文档。 */
@@ -1082,6 +1117,7 @@ function WorkspaceInner() {
               evaluationLoading={evaluationLoading}
               evaluationError={evaluationError}
               onEvaluate={handleEvaluate}
+              canUseEvaluation={canUseEvaluation}
             />
           ) : null}
 
@@ -1115,14 +1151,16 @@ function WorkspaceInner() {
                   onBack={() => setCurrentView("articles")}
                   paragraphRewritePoints={quota ? quota.operation_points.paragraph_rewrite : null}
                 />
-                <EvaluationPanel
-                  evaluation={evaluation}
-                  loading={evaluationLoading}
-                  error={evaluationError}
-                  supported={EVALUATION_GENRES.includes(document.genre)}
-                  genre={document.genre}
-                  onEvaluate={handleEvaluate}
-                />
+                {canUseEvaluation ? (
+                  <EvaluationPanel
+                    evaluation={evaluation}
+                    loading={evaluationLoading}
+                    error={evaluationError}
+                    supported={EVALUATION_GENRES.includes(document.genre)}
+                    genre={document.genre}
+                    onEvaluate={handleEvaluate}
+                  />
+                ) : null}
               </>
             ) : (
               <div className="empty-state">
@@ -1174,12 +1212,10 @@ function WorkspaceInner() {
           styleName={styleName}
           profileJson={profileJson}
           confirmedStyleId={confirmedStyleId}
-          uploadGenre={uploadGenre}
           busyAction={busyAction}
           uploadError={uploadError}
           analysisError={analysisError}
           confirmError={confirmError}
-          onUploadGenreChange={setUploadGenre}
           onStyleNameChange={setStyleName}
           onProfileJsonChange={setProfileJson}
           onUpload={handleUpload}

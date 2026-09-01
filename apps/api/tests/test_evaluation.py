@@ -7,7 +7,7 @@ Covers:
 - GET  /v1/writing-tasks/{id}/evaluation (latest report)
 - genre gating (首版仅散文)
 - ownership isolation
-- auto evaluation hook after 散文 generation + system message
+- admin-only gate + auto evaluation hook after 管理员散文 generation + system message
 - op_article_evaluate seed row (预留计费开关，首版 points=0)
 """
 from __future__ import annotations
@@ -57,6 +57,18 @@ def _register(c: TestClient, username: str, password: str = "password123") -> No
 
 def _login(c: TestClient, username: str, password: str = "password123") -> None:
     c.post("/v1/auth/login", json={"username": username, "password": password})
+
+
+def _promote_admin(c: TestClient, SLS: sessionmaker) -> None:
+    me = c.get("/v1/me").json()
+    db = SLS()
+    try:
+        user = db.get(models.User, me["user_id"])
+        assert user is not None
+        user.is_admin = True
+        db.commit()
+    finally:
+        db.close()
 
 
 def _make_style(c: TestClient, name: str = "样例风格") -> str:
@@ -170,8 +182,9 @@ def test_evaluate_requires_auth(eval_env):
 
 
 def test_evaluate_prose_returns_structured_report(eval_env):
-    c, _SLS = eval_env
+    c, SLS = eval_env
     _register(c, "evaluser")
+    _promote_admin(c, SLS)
     style_id = _make_style(c)
     task = _make_task(c, style_id)
 
@@ -194,8 +207,9 @@ def test_evaluate_prose_returns_structured_report(eval_env):
 
 
 def test_evaluate_rejects_unsupported_genre(eval_env):
-    c, _SLS = eval_env
+    c, SLS = eval_env
     _register(c, "poetuser")
+    _promote_admin(c, SLS)
     style_id = _make_style(c)
     task = _make_task(c, style_id, genre="诗歌")
 
@@ -205,8 +219,9 @@ def test_evaluate_rejects_unsupported_genre(eval_env):
 
 
 def test_get_evaluation_returns_latest(eval_env):
-    c, _SLS = eval_env
+    c, SLS = eval_env
     _register(c, "latestuser")
+    _promote_admin(c, SLS)
     style_id = _make_style(c)
     task = _make_task(c, style_id)
 
@@ -220,8 +235,9 @@ def test_get_evaluation_returns_latest(eval_env):
 
 
 def test_get_evaluation_404_when_absent(eval_env):
-    c, _SLS = eval_env
+    c, SLS = eval_env
     _register(c, "absentuser")
+    _promote_admin(c, SLS)
     style_id = _make_style(c)
     task = _make_task(c, style_id, genre="诗歌")  # 非散文不会自动鉴评
 
@@ -241,9 +257,27 @@ def test_evaluate_other_users_task_is_hidden(eval_env):
     assert resp.status_code == 404
 
 
+def test_regular_user_cannot_use_evaluation(eval_env):
+    c, _SLS = eval_env
+    _register(c, "regularuser")
+    style_id = _make_style(c)
+    task = _make_task(c, style_id)
+
+    post_resp = c.post(f"/v1/writing-tasks/{task['task_id']}/evaluate")
+    get_resp = c.get(f"/v1/writing-tasks/{task['task_id']}/evaluation")
+    doc_get_resp = c.get(f"/v1/documents/{task['document']['id']}/evaluation")
+    doc_post_resp = c.post(f"/v1/documents/{task['document']['id']}/evaluate")
+
+    assert post_resp.status_code == 403
+    assert get_resp.status_code == 403
+    assert doc_get_resp.status_code == 403
+    assert doc_post_resp.status_code == 403
+
+
 def test_evaluation_row_is_persisted(eval_env):
     c, SLS = eval_env
     _register(c, "persistuser")
+    _promote_admin(c, SLS)
     style_id = _make_style(c)
     task = _make_task(c, style_id)
 
@@ -259,8 +293,9 @@ def test_evaluation_row_is_persisted(eval_env):
 # ---------------- 自动化钩子 ----------------
 
 def test_auto_evaluation_after_prose_generation(eval_env):
-    c, _SLS = eval_env
+    c, SLS = eval_env
     _register(c, "autouser")
+    _promote_admin(c, SLS)
     style_id = _make_style(c)
     task = _make_task(c, style_id)
 
@@ -270,8 +305,9 @@ def test_auto_evaluation_after_prose_generation(eval_env):
 
 
 def test_auto_evaluation_pushes_system_message(eval_env):
-    c, _SLS = eval_env
+    c, SLS = eval_env
     _register(c, "notifyuser")
+    _promote_admin(c, SLS)
     style_id = _make_style(c)
     _make_task(c, style_id)
 
@@ -280,10 +316,27 @@ def test_auto_evaluation_pushes_system_message(eval_env):
 
 
 def test_generation_response_carries_evaluation_summary(eval_env):
-    c, _SLS = eval_env
+    c, SLS = eval_env
     _register(c, "summaryuser")
+    _promote_admin(c, SLS)
     style_id = _make_style(c)
     task = _make_task(c, style_id)
 
     assert task.get("evaluation") is not None
     assert task["evaluation"]["grade"] in {"S", "A", "B", "C", "D"}
+
+
+def test_regular_user_generation_does_not_auto_evaluate(eval_env):
+    c, SLS = eval_env
+    _register(c, "noautouser")
+    style_id = _make_style(c)
+    task = _make_task(c, style_id)
+
+    assert "evaluation" not in task
+
+    db = SLS()
+    rows = db.scalars(
+        select(models.ArticleEvaluation).where(models.ArticleEvaluation.writing_task_id == task["task_id"])
+    ).all()
+    db.close()
+    assert rows == []

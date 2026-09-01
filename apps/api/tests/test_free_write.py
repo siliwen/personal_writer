@@ -133,6 +133,7 @@ def test_free_writing_creates_document_with_system_style_and_skips_eval() -> Non
 def test_free_writing_document_cannot_be_evaluated() -> None:
     client = TestClient(app)
     _ensure_logged_in(client)
+    _promote_admin(client)
     _grant_pro(client)
 
     created = client.post(

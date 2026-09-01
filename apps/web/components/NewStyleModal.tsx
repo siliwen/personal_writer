@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { BusyAction, StyleJob, StyleDraftView } from "@/lib/types";
-import { GENRES } from "@/lib/types";
 import { useAuth } from "@/lib/auth-context";
 import { StyleProfileEditor } from "./StyleProfileEditor";
 
@@ -12,12 +11,10 @@ type NewStyleModalProps = {
   styleName: string;
   profileJson: string;
   confirmedStyleId: string;
-  uploadGenre: string;
   busyAction: BusyAction;
   uploadError: string;
   analysisError: string;
   confirmError: string;
-  onUploadGenreChange: (genre: string) => void;
   onStyleNameChange: (name: string) => void;
   onProfileJsonChange: (json: string) => void;
   onUpload: (files: FileList) => void;
@@ -34,12 +31,10 @@ export function NewStyleModal(props: NewStyleModalProps) {
     styleName,
     profileJson,
     confirmedStyleId,
-    uploadGenre,
     busyAction,
     uploadError,
     analysisError,
     confirmError,
-    onUploadGenreChange,
     onStyleNameChange,
     onProfileJsonChange,
     onUpload,
@@ -62,7 +57,7 @@ export function NewStyleModal(props: NewStyleModalProps) {
   const isConfirming = busyAction === "confirm";
 
   // Determine which step we're on
-  const step = styleDraftView ? (confirmedStyleId ? 3 : 2) : 1;
+  const step = styleDraftView ? (confirmedStyleId ? 3 : 2) : (styleJob || isAnalyzing ? 2 : 1);
 
   const allExpanded = styleDraftView
     ? styleDraftView.dimensions.length > 0 &&
@@ -193,19 +188,8 @@ export function NewStyleModal(props: NewStyleModalProps) {
                 </div>
               )}
 
-              <div className="form-field" style={{ marginTop: "16px" }}>
-                <label className="form-label">作品文体</label>
-                <select
-                  className="form-select"
-                  value={uploadGenre}
-                  onChange={(e) => onUploadGenreChange(e.target.value)}
-                >
-                  {GENRES.map((g) => <option key={g} value={g}>{g}</option>)}
-                </select>
-              </div>
-
-              <p className="form-hint" style={{ marginTop: "12px" }}>
-                系统会自动完成上传、解析和风格分析。建议选择 2-5 篇风格相近的作品以获得更准确的分析结果。
+              <p className="upload-guidance">
+                建议上传同一种文体、风格相近的 2-5 篇作品，例如都上传散文或都上传小说片段。不同文体混在一起会降低风格提取准确度。
               </p>
 
               {uploadError ? <p className="inline-error" role="alert">{uploadError}</p> : null}
@@ -235,7 +219,7 @@ export function NewStyleModal(props: NewStyleModalProps) {
                   <p className="diag-loading-text">
                     {isUploading ? "正在上传和解析作品……" : "正在分析写作风格……"}
                   </p>
-                  <p className="diag-loading-hint">分析过程约需 10-30 秒，请耐心等待</p>
+                  <p className="diag-loading-hint">分析过程可能需要一两分钟，完成后会自动进入确认页</p>
                 </div>
               ) : null}
 

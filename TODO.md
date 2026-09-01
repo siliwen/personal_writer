@@ -10,6 +10,15 @@ MVP1.1 已补真实个人用户系统，当前目标是在用户数据隔离下�
 
 未登录预览工作台 → 注册/登录 → 二选一开始：上传多篇相似作品并自动分析风格后确认保存，或直接选择已有风格 → 选择风格和贴近程度生成文章 → 在正文中按自然段原地重写。
 
+## 生产发布托管
+
+- [x] 安装并验证阿里云 Workbench CLI：`workbench v1.0.1`。
+- [x] 配置 Workbench profile：`moxx-prod`。
+- [x] 只读确认生产 ECS：`i-bp16w2dei36gapux2ew9` / `cn-hangzhou` / `/opt/moxx`，`moxx-api`、`moxx-web`、`nginx` 均运行，`/healthz` 正常。
+- [x] 新增本地托管发布入口：`scripts/deploy-production.ps1`。
+- [x] 新增远端安全更新脚本：`scripts/remote-update-production.sh`。
+- [ ] 首次使用托管发布完成一次真实生产更新并记录结果。
+
 ## 阶段 0：评测与产品决策
 
 - [x] 建立 `eval_sets/mvp_style_eval_v1/` 评测 harness。
@@ -213,6 +222,40 @@ MVP1.1 已补真实个人用户系统，当前目标是在用户数据隔离下�
 **改动**
 - [x] `apps/web/next.config.ts`：新增 `rewrites()`——`/api/:path*` → `${API_PROXY_TARGET || "http://127.0.0.1:8010"}/:path*`。
 - [x] 生产安全性实测：rewrites 只进服务端 `routes-manifest.json`（afterFiles），客户端 chunks 无 `:8010`、无 `NEXT_PUBLIC_API_BASE_URL` 残留（复刻 `update-from-tar.sh` 发布自检全过）；生产 nginx 在请求到达 Next.js 前已 proxy_pass `/api/`，rewrites 永不触发。
+
+## 2026-09-01 线上新建风格 504 超时修复（后台分析 + 前端轮询）
+
+**需求来源**：用户截图反馈线上 `POST /api/v1/style-analysis-jobs` 约 60 秒后返回 `504 Gateway Timeout`，前端显示 `Unexpected token '<'`。
+
+**根因**
+1. 新建风格接口在请求内同步执行 Style Profile v2 分析，并等待 Qwen 返回；上传接口正常是因为只负责解析入库。
+2. 线上虽然没有阿里云 SLB，但 nginx `/api/` 反向代理仍有默认读取超时；Qwen 慢于代理等待时间时，nginx 返回 HTML 504 页面。
+3. 前端 `parseJson` 不区分 JSON/HTML 错误响应，导致把代理错误页显示为 JSON 解析错误。
+
+**改动**
+- [x] 后端 `POST /v1/style-analysis-jobs` 改为立即创建 `status=analyzing` 的任务并返回；Style Profile 分析进入 FastAPI background task。
+- [x] 后端 `GET /v1/style-analysis-jobs/{job_id}` 用于前端轮询；后台完成后写回 `status=draft_pending_confirmation` 和 `draft_profile`，失败时写回 `status=failed`。
+- [x] 前端新建风格流程在上传后提交分析任务，并每 2 秒轮询一次，完成后自动进入确认保存页。
+- [x] 前端错误解析支持非 JSON 响应；再次遇到 HTML 504 时显示“服务器处理超时，请稍后重试。”。
+- [x] 部署脚本 nginx `/api/` 增加 `proxy_read_timeout 180s`、`proxy_send_timeout 180s`、`proxy_connect_timeout 30s`，降低其他慢接口被代理提前截断的风险。
+- [x] 后端失败状态不返回原文或内部长错误，只暴露通用失败文案和异常类型。
+
+**验证**
+- [x] `test_mvp1_workflow.py` 24 条通过，新增测试覆盖“创建风格分析任务先返回 analyzing，随后详情接口可取得草稿”。
+- [x] `test_quota_and_admin.py` 12 条通过，确认风格分析仍正常扣积分。
+- [x] `test_evaluation.py`、`test_messages.py`、`test_auth_workflow.py` 共 38 条通过。
+- [x] 前端 TypeScript 检查通过。
+- [x] `next build --webpack` 通过；本地环境仍有 Next SWC 原生包加载警告，但已自动 fallback 到 WASM，不阻断构建。
+
+## 2026-09-01 文章鉴评改为管理员功能
+
+**需求来源**：用户截图反馈“文章鉴评”不应开放给普通用户，要求只有管理员才有该功能。
+
+**改动**
+- [x] 后端自动鉴评仅管理员触发，普通用户生成文章不再返回鉴评摘要、不创建鉴评记录、不发送鉴评系统消息。
+- [x] 手动鉴评与鉴评报告查询接口增加管理员校验；仍保留用户本人文章隔离，管理员也不能通过该入口读取他人私有文章。
+- [x] 前端写作页和文章详情页仅管理员显示“文章鉴评”面板；普通用户打开文章不会请求鉴评接口。
+- [x] 测试补充普通用户 403、管理员可鉴评、普通用户生成不自动鉴评；自由写作“不支持鉴评”改为管理员身份下验证。
 
 ## 2026-08-17 法律协议接入注册/登录/页脚
 

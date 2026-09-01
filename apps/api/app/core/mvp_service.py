@@ -124,10 +124,34 @@ def create_style_analysis_job(db: Session, *, user_id: str, material_ids: list[s
         id=new_id("style_job"),
         user_id=user_id,
         material_ids=[item.id for item in materials],
-        status="draft_pending_confirmation",
-        draft_profile=build_style_draft(db, materials=materials),
+        status="analyzing",
+        draft_profile={},
     )
     db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def complete_style_analysis_job(db: Session, *, job_id: str) -> models.StyleAnalysisJob | None:
+    job = db.get(models.StyleAnalysisJob, job_id)
+    if job is None or job.status != "analyzing":
+        return job
+    try:
+        materials = _require_user_materials(db, user_id=job.user_id, material_ids=job.material_ids)
+        job.draft_profile = build_style_draft(db, materials=materials)
+        job.status = "draft_pending_confirmation"
+    except Exception as exc:  # noqa: BLE001 - 后台任务需把失败状态写回，供前端轮询展示
+        db.rollback()
+        job = db.get(models.StyleAnalysisJob, job_id)
+        if job is None:
+            return None
+        job.status = "failed"
+        job.draft_profile = {
+            "status": "failed",
+            "error": "风格分析失败，请稍后重试。",
+            "error_type": exc.__class__.__name__,
+        }
     db.commit()
     db.refresh(job)
     return job
@@ -161,6 +185,12 @@ def confirm_style_profile(
     )
     if job.status == "confirmed" and existing_for_job:
         return existing_for_job
+    if job.status == "analyzing":
+        job = complete_style_analysis_job(db, job_id=job.id)
+        if job is None or job.status == "analyzing":
+            raise HTTPException(status_code=409, detail="风格分析还在进行中，请稍后再保存。")
+    if job.status == "failed":
+        raise HTTPException(status_code=409, detail="风格分析失败，请重新上传作品后再试。")
     if job.status != "draft_pending_confirmation":
         raise HTTPException(status_code=409, detail="style analysis job is not waiting for confirmation")
     existing_style = db.scalar(

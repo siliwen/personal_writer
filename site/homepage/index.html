@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>siliwen · 写字，也做点小工具</title>
+<meta name="description" content="一个在 AI 和中文写作之间折腾的人，以及他做的一些小工具。">
+<!--
+  ============================================================
+  个人主页 · moxx.cn（线上生产文件）
+  ------------------------------------------------------------
+  部署位置：ECS /var/www/home/index.html（nginx root 指向此目录）
+  同目录 moxx.conf 为对应 nginx 站点配置（三子域分流）。
+  上传命令（本机执行，Windows 路径必须写 C:/ 形式）：
+    MSYS_NO_PATHCONV=1 workbench upload \
+      "D:/AI_talk/person_writer/site/homepage/index.html" \
+      /var/www/home/index.html --instance-id <实例ID> -f
+  上传后需修正权限，否则 nginx 返回 403：
+    chmod 755 /var/www/home && chmod 644 /var/www/home/index.html
+
+  配色：墨写 = 赭红 #B4472E ／ 图生3D = 青蓝 #2A6F8E
+  色彩只出现在"该出现的地方"：背景光晕、图标、标签、hover 反馈。
+  仍是占位、待替换的内容（在 <body> 里搜 TODO）：
+   1. TODO-NAME   顶部小标
+   2. TODO-H1     主标题
+   3. TODO-LEDE   副标题自我介绍
+   4. TODO-NOTE   关于 AI 的一段话
+   5. TODO-POSTS  文章列表（3 条示例标题与日期均为虚构）
+  合规：页脚 ICP 备案号与公安联网备案号必须保留，不可删除。
+  零外部依赖，深色模式自动跟随系统。
+  ============================================================
+-->
+<style>
+  :root {
+    --bg:      #FBFAF8;
+    --card:    #FFFFFF;
+    --ink:     #1A1917;
+    --ink-2:   #56514B;
+    --ink-3:   #8C8681;
+    --line:    #E7E3DC;
+
+    /* 主题色：赭红（墨写） */
+    --writer:      #B4472E;
+    --writer-soft: rgba(180, 71, 46, .10);
+    --writer-glow: rgba(180, 71, 46, .20);
+
+    /* 主题色：青蓝（图生3D） */
+    --dev3d:       #2A6F8E;
+    --dev3d-soft:  rgba(42, 111, 142, .10);
+    --dev3d-glow:  rgba(42, 111, 142, .20);
+
+    --shadow: rgba(26, 25, 23, .07);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:     #0E0D0C;
+      --card:   #171514;
+      --ink:    #EDEAE5;
+      --ink-2:  #A8A29C;
+      --ink-3:  #6E6862;
+      --line:   #272320;
+
+      --writer:      #E08A6D;
+      --writer-soft: rgba(224, 138, 109, .13);
+      --writer-glow: rgba(224, 138, 109, .26);
+
+      --dev3d:       #6FB6CE;
+      --dev3d-soft:  rgba(111, 182, 206, .13);
+      --dev3d-glow:  rgba(111, 182, 206, .26);
+
+      --shadow: rgba(0, 0, 0, .5);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.6;
+    /* 双色光晕：右上暖赭、左下青蓝，极淡，只为了让白底不那么"空" */
+    background:
+      radial-gradient(920px 560px at 92% -14%, var(--writer-glow), transparent 64%),
+      radial-gradient(820px 560px at -12% 26%, var(--dev3d-glow), transparent 62%),
+      var(--bg);
+    background-attachment: fixed;
+  }
+
+  .wrap {
+    max-width: 660px;
+    margin: 0 auto;
+    padding: 104px 24px 56px;
+  }
+
+  /* ---------- 顶部 ---------- */
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    letter-spacing: .14em;
+    color: var(--ink-3);
+    margin-bottom: 24px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--writer);
+  }
+
+  h1 {
+    font-family: "Songti SC", "Noto Serif SC", "Source Han Serif SC",
+                 "SimSun", Georgia, serif;
+    font-size: clamp(31px, 5.6vw, 43px);
+    line-height: 1.32;
+    font-weight: 600;
+    letter-spacing: .01em;
+    margin: 0;
+  }
+
+  /* 荧光笔式高亮：不改变文字颜色，只在字底铺一层淡赭 */
+  .mark {
+    background: linear-gradient(transparent 63%, var(--writer-soft) 63%);
+    padding: 0 2px;
+    margin: 0 -2px;
+  }
+
+  .lede {
+    margin: 22px 0 0;
+    font-size: 15.5px;
+    line-height: 1.95;
+    color: var(--ink-2);
+    max-width: 34em;
+  }
+
+  /* ---------- 项目卡片 ---------- */
+  .projects {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-top: 52px;
+  }
+
+  .card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px 20px 18px;
+    text-decoration: none;
+    color: inherit;
+    overflow: hidden;
+    transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+  }
+
+  /* 卡片右上角一抹极淡的主题色，hover 时浮出来 */
+  .card::before {
+    content: "";
+    position: absolute;
+    top: -70px;
+    right: -70px;
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    background: var(--tint);
+    opacity: .6;
+    transition: opacity .25s ease, transform .25s ease;
+    pointer-events: none;
+  }
+  .card:hover::before { opacity: 1; transform: scale(1.15); }
+
+  .card:hover {
+    transform: translateY(-3px);
+    border-color: var(--tone);
+    box-shadow: 0 10px 26px var(--shadow);
+  }
+
+  .card--writer { --tone: var(--writer); --tint: var(--writer-soft); }
+  .card--3d     { --tone: var(--dev3d);  --tint: var(--dev3d-soft); }
+
+  .card-head {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 18px;
+  }
+
+  .icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+    display: grid;
+    place-items: center;
+    background: var(--tint);
+    color: var(--tone);
+  }
+  .icon svg {
+    width: 19px;
+    height: 19px;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .tag {
+    font-size: 11px;
+    letter-spacing: .06em;
+    color: var(--tone);
+    background: var(--tint);
+    border-radius: 999px;
+    padding: 3px 9px;
+    white-space: nowrap;
+  }
+
+  .card h2 {
+    position: relative;
+    font-size: 16.5px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    letter-spacing: .01em;
+  }
+
+  .card p {
+    position: relative;
+    font-size: 13.5px;
+    line-height: 1.8;
+    color: var(--ink-2);
+    margin: 0 0 18px;
+    flex: 1;
+  }
+
+  .card-go {
+    position: relative;
+    font-size: 12.5px;
+    color: var(--ink-3);
+    letter-spacing: .02em;
+    transition: color .2s ease;
+  }
+  .card:hover .card-go { color: var(--tone); }
+
+  /* ---------- 区块 ---------- */
+  .section { margin-top: 74px; }
+
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 12.5px;
+    letter-spacing: .12em;
+    color: var(--ink-3);
+    font-weight: 400;
+    margin: 0 0 24px;
+  }
+  .section-title::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--writer);
+    opacity: .75;
+    flex: none;
+  }
+  .section-title::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--line);
+  }
+
+  /* ---------- 关于 AI ---------- */
+  .note-box {
+    border-left: 2px solid var(--writer);
+    padding: 2px 0 2px 20px;
+  }
+
+  .note {
+    font-size: 15.5px;
+    line-height: 2.05;
+    color: var(--ink-2);
+    margin: 0;
+    font-family: "Songti SC", "Noto Serif SC", "SimSun", Georgia, serif;
+  }
+  .note em {
+    font-style: normal;
+    color: var(--ink);
+    background: linear-gradient(transparent 64%, var(--writer-soft) 64%);
+    padding: 0 1px;
+  }
+
+  /* ---------- 文章列表 ---------- */
+  .posts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .posts li { border-bottom: 1px solid var(--line); }
+
+  .posts a {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 15px 2px;
+    text-decoration: none;
+    color: var(--ink);
+    transition: color .16s ease, padding-left .16s ease;
+  }
+  .posts a:hover {
+    color: var(--writer);
+    padding-left: 6px;
+  }
+
+  .posts .title { font-size: 14.5px; line-height: 1.65; }
+
+  .posts time {
+    font-size: 12px;
+    color: var(--ink-3);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    transition: color .16s ease;
+  }
+  .posts a:hover time { color: var(--dev3d); }
+
+  /* ---------- 页脚 ---------- */
+  footer {
+    position: relative;
+    margin-top: 86px;
+    padding-top: 24px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 20px;
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+  footer::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+      rgba(180, 71, 46, .50),
+      rgba(42, 111, 142, .40),
+      transparent 72%);
+  }
+  @media (prefers-color-scheme: dark) {
+    footer::before {
+      background: linear-gradient(90deg,
+        rgba(224, 138, 109, .45),
+        rgba(111, 182, 206, .35),
+        transparent 72%);
+    }
+  }
+
+  footer a {
+    color: var(--ink-3);
+    text-decoration: none;
+    transition: color .16s ease;
+  }
+  footer a:hover { color: var(--ink); }
+
+  .beian { display: flex; flex-wrap: wrap; gap: 14px; }
+
+  /* ---------- 移动端 ---------- */
+  @media (max-width: 620px) {
+    .wrap { padding: 60px 20px 44px; }
+    .projects { grid-template-columns: 1fr; gap: 12px; margin-top: 40px; }
+    .section { margin-top: 60px; }
+    .posts a { flex-direction: column; gap: 4px; }
+    footer { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- TODO-NAME -->
+  <div class="eyebrow">siliwen</div>
+
+  <!-- TODO-H1 -->
+  <h1>写字，<br>也做点<span class="mark">顺手的小工具</span></h1>
+
+  <!-- TODO-LEDE -->
+  <p class="lede">
+    一个在 AI 和中文写作之间折腾的人。<br>
+    不算工程师，只是习惯把想到的东西做出来，能自己用，就顺便放上来。
+  </p>
+
+  <!-- 项目卡片 -->
+  <div class="projects">
+
+    <a class="card card--writer" href="https://write.moxx.cn" target="_blank" rel="noopener">
+      <div class="card-head">
+        <span class="icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 20h4L20 8a2.8 2.8 0 0 0-4-4L4 16v4z"/>
+            <path d="M15 5l4 4"/>
+          </svg>
+        </span>
+        <span class="tag">在线</span>
+      </div>
+      <h2>墨写</h2>
+      <p>AI 写作工作台。先把你的文风学过来，再陪你把一个念头写成一篇文章，逐段改到你满意。</p>
+      <span class="card-go">write.moxx.cn →</span>
+    </a>
+
+    <a class="card card--3d" href="https://3d.moxx.cn" target="_blank" rel="noopener">
+      <div class="card-head">
+        <span class="icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/>
+            <path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>
+          </svg>
+        </span>
+        <span class="tag">Demo</span>
+      </div>
+      <h2>图生 3D</h2>
+      <p>丢一张图片进去，在浏览器里直接长出可旋转的立体模型。纯前端跑，不上传服务器。</p>
+      <span class="card-go">3d.moxx.cn →</span>
+    </a>
+
+  </div>
+
+  <!-- TODO-NOTE -->
+  <section class="section">
+    <h3 class="section-title">关于 AI</h3>
+    <div class="note-box">
+      <p class="note">
+        我更在意的不是它能写多快，而是它能不能<em>不把话说满</em>。
+        好的工具应该像一支顺手的笔——你写字的时候不会想起笔的存在，
+        只会在放下笔之后，觉得刚才那些话是自己说出来的。
+      </p>
+    </div>
+  </section>
+
+  <!-- TODO-POSTS -->
+  <section class="section">
+    <h3 class="section-title">写下的</h3>
+    <ul class="posts">
+      <li>
+        <a href="#">
+          <span class="title">工具不该替你想，只该帮你写得下去</span>
+          <time>2026.11</time>
+        </a>
+      </li>
+      <li>
+        <a href="#">
+          <span class="title">为什么我坚持让 AI 先学会你的文风</span>
+          <time>2026.10</time>
+        </a>
+      </li>
+      <li>
+        <a href="#">
+          <span class="title">小工具的寿命</span>
+          <time>2026.09</time>
+        </a>
+      </li>
+    </ul>
+  </section>
+
+  <footer>
+    <span>© 2026 siliwen</span>
+    <div class="beian">
+      <a href="https://beian.miit.gov.cn" target="_blank" rel="noopener">陕ICP备2026021906号-1</a>
+      <a href="https://beian.mps.gov.cn/#/query/webSearch?code=61019602000894" target="_blank" rel="noopener">陕公网安备61019602000894号</a>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>

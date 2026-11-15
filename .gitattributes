@@ -1,0 +1,4 @@
+# 部署类文件按原样存储，禁止 Git 做换行转换。
+# 本机 core.autocrlf=true，若不声明，Windows 检出时这些文件会变成 CRLF，
+# 导致 nginx 配置与服务器上的副本不一致（md5 校验失败）。
+site/** -text

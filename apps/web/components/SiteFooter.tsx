@@ -5,20 +5,17 @@
  *
  * 合规要求：
  * - ICP 备案号（工信部）已在网站开通后取得，必须展示并链接至工信部备案管理系统。
- * - 公安联网备案（公网安备）是独立的法定义务，应在网站开通 30 日内办理；
- *   但「必须展示」的前提是已经办妥并取得编号。当前尚未办理，故 GONGAN_BEIAN_NO 留空，
- *   渲染时为空字符串则不渲染该区块——绝不显示假的备案号。
- *   待公安备案下发后，把编号填入 GONGAN_BEIAN_NO 即可自动出现，无需改结构。
+ * - 公安联网备案（公网安备）是独立的法定义务，编号已下发，必须展示并链接至公安部备案查询页。
+ *   若将来编号失效，把 GONGAN_BEIAN_NO 置空即可自动隐藏该区块——绝不显示假的备案号。
  */
 
 // ICP 备案号（工信部），已下发，必须展示。
 const ICP_BEIAN_NO = "陕ICP备2026021906号-1";
 const ICP_BEIAN_URL = "https://beian.miit.gov.cn";
 
-// 公安联网备案号（公网安备）预留位：办妥后填入编号（如「陕公网安备XXXXXXXX号」），
-// 留空则不渲染，绝不展示假号。
-const GONGAN_BEIAN_NO = "";
-const GONGAN_BEIAN_URL = "https://beian.mps.gov.cn";
+// 公安联网备案号（公网安备），已下发；留空则不渲染该区块。
+const GONGAN_BEIAN_NO = "陕公网安备61019602000894号";
+const GONGAN_BEIAN_URL = "https://beian.mps.gov.cn/#/query/webSearch?code=61019602000894";
 
 const SITE_NAME = "墨小小";
 

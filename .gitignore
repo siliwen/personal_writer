@@ -61,3 +61,11 @@ outputs/db_find.txt
 outputs/fw_e2e_user.txt
 outputs/layout.css
 outputs/*.json
+outputs/kill_*.txt
+
+# 本地缓存目录（AI 工具 / 构建缓存，不入库）
+.cache/
+
+# 误建的嵌套仓库目录（内部只有 .git，非项目代码，不入库）
+personal_writer/
+personal_writing_agent_saas/
